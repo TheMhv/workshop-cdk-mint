@@ -1,0 +1,136 @@
+x-lnd: &lnd
+  image: polarlightning/lnd:0.20.0-beta
+  depends_on:
+    - bitcoind
+  restart: unless-stopped
+
+services:
+  bitcoind:
+    image: polarlightning/bitcoind:30.0
+    container_name: bitcoind
+    restart: unless-stopped
+    command: >
+      bitcoind
+      -regtest=1
+      -server=1
+      -rpcuser=bitcoin
+      -rpcpassword=bitcoin
+      -rpcbind=0.0.0.0
+      -rpcallowip=0.0.0.0/0
+      -rpcport=18443
+      -txindex=1
+      -fallbackfee=0.0002
+      -dnsseed=0
+      -listenonion=0
+      -zmqpubrawblock=tcp://0.0.0.0:28332
+      -zmqpubrawtx=tcp://0.0.0.0:28333
+    ports:
+      - "18443:18443"
+    volumes:
+      - bitcoind-data:/home/bitcoin/.bitcoin
+
+  lnd-one:
+    <<: *lnd
+    container_name: lnd-one
+    hostname: lnd-one
+    command: >
+      lnd
+      --noseedbackup
+      --alias=lnd-one
+      --listen=0.0.0.0:9735
+      --rpclisten=0.0.0.0:10009
+      --restlisten=0.0.0.0:8080
+      --tlsextradomain=lnd-one
+      --bitcoin.active
+      --bitcoin.regtest
+      --bitcoin.node=bitcoind
+      --bitcoind.rpchost=bitcoind:18443
+      --bitcoind.rpcuser=bitcoin
+      --bitcoind.rpcpass=bitcoin
+      --bitcoind.zmqpubrawblock=tcp://bitcoind:28332
+      --bitcoind.zmqpubrawtx=tcp://bitcoind:28333
+    ports:
+      - "10009:10009"
+      - "8081:8080"
+    volumes:
+      - lnd-one-data:/home/lnd/.lnd
+
+  lnd-two:
+    <<: *lnd
+    container_name: lnd-two
+    hostname: lnd-two
+    command: >
+      lnd
+      --noseedbackup
+      --alias=lnd-two
+      --listen=0.0.0.0:9735
+      --rpclisten=0.0.0.0:10009
+      --restlisten=0.0.0.0:8080
+      --tlsextradomain=lnd-two
+      --bitcoin.active
+      --bitcoin.regtest
+      --bitcoin.node=bitcoind
+      --bitcoind.rpchost=bitcoind:18443
+      --bitcoind.rpcuser=bitcoin
+      --bitcoind.rpcpass=bitcoin
+      --bitcoind.zmqpubrawblock=tcp://bitcoind:28332
+      --bitcoind.zmqpubrawtx=tcp://bitcoind:28333
+    ports:
+      - "10010:10009"
+      - "8082:8080"
+    volumes:
+      - lnd-two-data:/home/lnd/.lnd
+
+  lnd-three:
+    <<: *lnd
+    container_name: lnd-three
+    hostname: lnd-three
+    command: >
+      lnd
+      --noseedbackup
+      --alias=lnd-three
+      --listen=0.0.0.0:9735
+      --rpclisten=0.0.0.0:10009
+      --restlisten=0.0.0.0:8080
+      --tlsextradomain=lnd-three
+      --bitcoin.active
+      --bitcoin.regtest
+      --bitcoin.node=bitcoind
+      --bitcoind.rpchost=bitcoind:18443
+      --bitcoind.rpcuser=bitcoin
+      --bitcoind.rpcpass=bitcoin
+      --bitcoind.zmqpubrawblock=tcp://bitcoind:28332
+      --bitcoind.zmqpubrawtx=tcp://bitcoind:28333
+    ports:
+      - "10011:10009"
+      - "8083:8080"
+    volumes:
+      - lnd-three-data:/home/lnd/.lnd
+
+  mint:
+    image: cashubtc/mintd:0.17.7
+    container_name: cdk-mint
+    restart: unless-stopped
+    depends_on:
+      - lnd-one
+    user: "0:0"
+    environment:
+      CDK_MINTD_URL: http://localhost:8085
+      CDK_MINTD_LISTEN_HOST: 0.0.0.0
+      CDK_MINTD_LISTEN_PORT: 8085
+      CDK_MINTD_DATABASE: sqlite
+      CDK_MINTD_MNEMONIC: "eye survey guilt napkin crystal cup whisper salt luggage manage unveil loyal"
+      CDK_MINTD_LN_BACKEND: lnd
+      CDK_MINTD_LND_ADDRESS: https://lnd-one:10009
+      CDK_MINTD_LND_CERT_FILE: /lnd/tls.cert
+      CDK_MINTD_LND_MACAROON_FILE: /lnd/data/chain/bitcoin/regtest/admin.macaroon
+    ports:
+      - "8085:8085"
+    volumes:
+      - lnd-one-data:/lnd:ro
+
+volumes:
+  bitcoind-data:
+  lnd-one-data:
+  lnd-two-data:
+  lnd-three-data:
