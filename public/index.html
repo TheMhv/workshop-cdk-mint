@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LND Invoice Tool</title>
+<style>
+  :root{
+    --bg:#000; --card:#0e0e12; --line:#232329; --text:#f2f2f5;
+    --muted:#8b8b96; --accent:#a259ff; --err:#ff6b6b;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);min-height:100vh;
+    display:flex;align-items:center;justify-content:center;padding:24px;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif;}
+  .card{width:100%;max-width:400px;background:var(--card);border:1px solid var(--line);
+    border-radius:14px;padding:22px;}
+  h1{font-size:15px;font-weight:600;margin:0 0 4px;}
+  .sub{color:var(--muted);font-size:12px;margin:0 0 18px;}
+  .tabs{display:flex;background:#000;border:1px solid var(--line);border-radius:9px;
+    padding:3px;margin-bottom:18px;}
+  .tab{flex:1;text-align:center;padding:8px 4px;font-size:11.5px;font-weight:600;
+    color:var(--muted);border-radius:7px;cursor:pointer;user-select:none;}
+  .tab.active{background:var(--accent);color:#fff;}
+  label{display:block;font-size:11.5px;color:var(--muted);margin:12px 0 5px;}
+  label:first-of-type{margin-top:0;}
+  textarea{width:100%;background:#000;border:1px solid var(--line);
+    color:var(--text);border-radius:8px;padding:10px 11px;font:inherit;font-size:13px;
+    resize:vertical;min-height:70px;}
+  input{width:100%;background:#000;border:1px solid var(--line);
+    color:var(--text);border-radius:8px;padding:10px 11px;font:inherit;font-size:13px;}
+  input:focus,textarea:focus{outline:none;border-color:var(--accent);}
+  button{width:100%;background:var(--accent);color:#fff;border:none;border-radius:8px;
+    padding:11px;font:inherit;font-size:13.5px;font-weight:600;cursor:pointer;margin-top:16px;}
+  button:hover{filter:brightness(1.1);}
+  button:disabled{opacity:.5;cursor:default;}
+  .hint{color:var(--accent);font-weight:600;}
+  .pane{display:none;}
+  .pane.active{display:block;}
+  pre{white-space:pre-wrap;word-break:break-all;background:#000;border:1px solid var(--line);
+    border-radius:8px;padding:11px;font-size:11.5px;margin-top:14px;}
+  pre.err{border-color:var(--err);color:var(--err);}
+  .kv{display:grid;grid-template-columns:auto 1fr;gap:5px 12px;font-size:12.5px;margin-top:14px;}
+  .kv div:nth-child(odd){color:var(--muted);}
+  .kv div:nth-child(even){word-break:break-all;text-align:right;}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>LND Invoice Tool</h1>
+
+  <div class="tabs">
+    <div class="tab active" data-tab="pay">Pay Invoice</div>
+    <div class="tab" data-tab="get">Get Invoice</div>
+    <div class="tab" data-tab="create">Create Invoice</div>
+  </div>
+
+  <div class="pane active" id="pane-pay">
+    <label for="payInvoice">Payment request (BOLT11)</label>
+    <textarea id="payInvoice" placeholder="lnbc..."></textarea>
+    <label for="amt">Amount in sats (only if invoice has none)</label>
+    <input id="amt" type="number" min="0" placeholder="optional">
+    <button id="btnPay">Send payment</button>
+    <div id="payOut"></div>
+  </div>
+
+  <div class="pane" id="pane-get">
+    <label for="getInvoice">Payment request (BOLT11) or payment hash</label>
+    <textarea id="getInvoice" placeholder="lnbc... or hex hash"></textarea>
+    <button id="btnGet">Look up</button>
+    <div id="getOut"></div>
+  </div>
+
+  <div class="pane" id="pane-create">
+    <label for="createAmt">Amount in sats <span id="limitHint" class="hint"></span></label>
+    <input id="createAmt" type="number" min="1" step="1" placeholder="required">
+    <label for="createDesc">Description</label>
+    <input id="createDesc" placeholder="optional">
+    <button id="btnCreate">Create invoice</button>
+    <div id="createOut"></div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+
+document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
+  document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+  document.querySelectorAll('.pane').forEach(x => x.classList.remove('active'));
+  t.classList.add('active');
+  $('pane-' + t.dataset.tab).classList.add('active');
+}));
+
+function isHex(s){ return /^[0-9a-fA-F]+$/.test(s) && s.length >= 32; }
+
+async function api(path, opts={}){
+  const res = await fetch(path, Object.assign({ headers: { 'Content-Type': 'application/json' } }, opts));
+  const data = await res.json();
+  if(!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+function renderKV(container, pairs){
+  const kv = document.createElement('div');
+  kv.className = 'kv';
+  pairs.forEach(([k,v]) => {
+    const dk = document.createElement('div'); dk.textContent = k;
+    const dv = document.createElement('div'); dv.textContent = v;
+    kv.appendChild(dk); kv.appendChild(dv);
+  });
+  container.innerHTML = '';
+  container.appendChild(kv);
+}
+function renderErr(container, err){
+  container.innerHTML = '';
+  const pre = document.createElement('pre');
+  pre.className = 'err';
+  pre.textContent = err.message || String(err);
+  container.appendChild(pre);
+}
+
+$('btnPay').addEventListener('click', async () => {
+  const out = $('payOut');
+  const request = $('payInvoice').value.trim();
+  const amt = $('amt').value.trim();
+  if(!request) return;
+  const btn = $('btnPay');
+  btn.disabled = true;
+  out.innerHTML = '';
+  try{
+    const d = await api('/api/pay', { method: 'POST', body: JSON.stringify({ request, amt }) });
+    renderKV(out, [
+      ['Status', 'Paid'],
+      ['Payment hash', d.payment_hash],
+      ['Fee (sats)', d.fee_sats],
+      ['Amount paid (sats)', d.sats_paid],
+      ['Preimage', d.preimage],
+    ]);
+  }catch(e){ renderErr(out, e); }
+  finally{ btn.disabled = false; }
+});
+
+let maxInvoiceSats = 1000;
+api('/api/config').then(c => {
+  maxInvoiceSats = c.max_invoice_sats;
+  $('createAmt').max = maxInvoiceSats;
+  $('limitHint').textContent = '(max ' + maxInvoiceSats.toLocaleString() + ')';
+}).catch(() => {
+  $('createAmt').max = maxInvoiceSats;
+  $('limitHint').textContent = '(max ' + maxInvoiceSats.toLocaleString() + ')';
+});
+
+$('btnCreate').addEventListener('click', async () => {
+  const out = $('createOut');
+  const amt = $('createAmt').value.trim();
+  const description = $('createDesc').value.trim();
+  const btn = $('btnCreate');
+  out.innerHTML = '';
+  const n = Number(amt);
+  if(!amt || !Number.isInteger(n) || n <= 0){
+    return renderErr(out, new Error('Enter a whole number of sats.'));
+  }
+  if(n > maxInvoiceSats){
+    return renderErr(out, new Error('Amount exceeds the limit of ' + maxInvoiceSats.toLocaleString() + ' sats.'));
+  }
+  btn.disabled = true;
+  try{
+    const d = await api('/api/create-invoice', { method: 'POST', body: JSON.stringify({ amt, description }) });
+    out.innerHTML = '';
+    const pre = document.createElement('pre');
+    pre.textContent = d.request;
+    out.appendChild(pre);
+    const copyBtn = document.createElement('button');
+    copyBtn.textContent = 'Copy invoice';
+    copyBtn.addEventListener('click', () => {
+      navigator.clipboard.writeText(d.request);
+      copyBtn.textContent = 'Copied!';
+      setTimeout(() => copyBtn.textContent = 'Copy invoice', 1500);
+    });
+    out.appendChild(copyBtn);
+    const kv = document.createElement('div');
+    out.appendChild(kv);
+    renderKVAppend(kv, [
+      ['Payment hash', d.payment_hash],
+      ['Amount (sats)', d.sats || 'any'],
+    ]);
+  }catch(e){ renderErr(out, e); }
+  finally{ btn.disabled = false; }
+});
+
+function renderKVAppend(container, pairs){
+  container.className = 'kv';
+  pairs.forEach(([k,v]) => {
+    const dk = document.createElement('div'); dk.textContent = k;
+    const dv = document.createElement('div'); dv.textContent = v;
+    container.appendChild(dk); container.appendChild(dv);
+  });
+}
+
+$('btnGet').addEventListener('click', async () => {
+  const out = $('getOut');
+  const val = $('getInvoice').value.trim();
+  if(!val) return;
+  out.innerHTML = '';
+  try{
+    if(val.toLowerCase().startsWith('ln')){
+      const d = await api('/api/decode', { method: 'POST', body: JSON.stringify({ request: val }) });
+      renderKV(out, [
+        ['Destination', d.destination],
+        ['Amount (sats)', d.sats || '0 (no amount set)'],
+        ['Description', d.description || '—'],
+        ['Payment hash', d.payment_hash],
+        ['Expires at', d.expires_at ? new Date(d.expires_at).toLocaleString() : '—'],
+      ]);
+    } else if(isHex(val)){
+      const d = await api('/api/invoice/' + val);
+      renderKV(out, [
+        ['State', d.is_confirmed ? 'SETTLED' : 'PENDING'],
+        ['Amount received (sats)', d.sats_received],
+        ['Amount requested (sats)', d.sats_requested],
+        ['Description', d.description || '—'],
+        ['Settled at', d.confirmed_at ? new Date(d.confirmed_at).toLocaleString() : '—'],
+      ]);
+    } else {
+      throw new Error('Enter a BOLT11 invoice (starts with "ln...") or a hex payment hash.');
+    }
+  }catch(e){ renderErr(out, e); }
+});
+</script>
+</body>
+</html>
